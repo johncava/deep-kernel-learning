@@ -10,6 +10,11 @@ import scipy as scip
 from scipy import linalg
 from scipy.spatial.distance import pdist, squareform
 
+class loss_function(torch.nn.Module):
+
+    def forward(self, loss):
+        return torch.mean(loss)
+
 ##
 #Note: Normalize data to avoid explosion or decay of numerical values, especially for calculating inverse
 ##
@@ -76,15 +81,14 @@ y_train = y[:2233]
 x_test = x[2233:]
 y_test = y[2233:]
 
-'''
+
 #SVM RBF Model
 clf = svm.SVC(kernel='rbf')
 clf.fit(x_train,y_train)
-ans = clf.predict(x_test)
-error =  y_test - ans
-print accuracy(error)
-print 'Done'
-'''
+ans = clf.predict(x_train)
+error =  y_train - ans
+print 'Sci-kit Learn SVM Vanilla Model: ', accuracy(error)
+
 
 #SVM computed gram matrix
 clf = svm.SVC(kernel='precomputed')
@@ -95,15 +99,17 @@ for iteration in xrange(5):
     #er = 0.5*(np.dot(np.dot(np.dot(k_inv, y_train), y_train.T), k_inv) - k_inv)
     d_my_kernel = (2/ (sigma ** 3))*scip.exp(- (pairwise_dists ** 2) / sigma ** 2)
     er = 0.5*np.trace(np.dot(k_inv,d_my_kernel)) - 0.5*np.dot(np.dot(np.dot(np.dot(y_train.T,k_inv),d_my_kernel),k_inv),y_train)
-    print er
+    #print sigma
     sigma = sigma - er
-'''
-error =  y_test - ans
-print accuracy(error)
-print 'Done'
-'''
 
-'''
+my_kernel = scip.exp(-(squareform(pdist(x_test, 'euclidean')) ** 2) / sigma ** 2)
+clf.fit(my_kernel, y_test)
+ans = clf.predict(my_kernel)
+error =  y_test - ans
+print 'SVM trained by gradient descent: ', accuracy(error)
+print 'Done'
+
+
 # Deep Learning Model
 inpt_train_x = torch.from_numpy(x_train)
 inpt_train_x = inpt_train_x.float()
@@ -112,9 +118,8 @@ inpt_train_y = inpt_train_y.float()
 
 inpt_train_x = Variable(inpt_train_x)
 inpt_train_y = Variable(inpt_train_y, requires_grad=False)
-'''
 
-'''
+
 # Vanilla Deep Learning Model
 model = torch.nn.Sequential(
     torch.nn.Linear(60, 10),
@@ -135,8 +140,6 @@ for t in range(20000):
 
     y_pred = model(inpt_train_x)
     loss = loss_fn(y_pred, inpt_train_y)
-    if t%1000 == 0:
-        print(t, loss.data[0])
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
@@ -159,5 +162,56 @@ new_array = np.array(new_array)
 error = y_test - new_array
 
 deep_acc = accuracy(error)
-print 'Accuracy: ' ,deep_acc, '%'
-'''
+print 'Vanilla Deep Learning Model Accuracy: ' ,deep_acc, '%'
+
+
+# Deep Kernel Learning Model
+model = torch.nn.Sequential(
+    torch.nn.Linear(60, 10),
+    torch.nn.ReLU(),
+    torch.nn.Linear(10,3)
+)
+
+loss_fn = loss_function()
+
+learning_rate = 1e-4
+
+optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+for t in range(4):
+
+    y_pred = model(inpt_train_x)
+    
+    g = y_pred.data.numpy()
+    g_k = squareform(pdist(g, 'euclidean'))
+    my_kernel = scip.exp(-(g_k ** 2) / sigma ** 2)
+    k_inv = np.linalg.inv(my_kernel + noise*np.identity(len(my_kernel)))
+    d_my_kernel = (2/ (sigma ** 3))*scip.exp(- (g_k ** 2) / sigma ** 2)
+    e = 0.5*np.trace(np.dot(k_inv,d_my_kernel)) - 0.5*np.dot(np.dot(np.dot(np.dot(y_train.T,k_inv),d_my_kernel),k_inv),y_train)
+    er = 0.5*(np.dot(np.dot(np.dot(k_inv, y_train), y_train.T), k_inv) - k_inv) 
+    er = np.dot(er,g)
+    sigma = sigma - e
+
+    g_p = torch.from_numpy(np.matrix(er))
+    g_p = g_p.float()
+    g_p = Variable(g_p, requires_grad=True)
+
+    loss = loss_fn(g_p)
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+
+inpt_test_x = torch.from_numpy(x_test)
+inpt_test_x = inpt_test_x.float()
+inpt_test_x = Variable(inpt_test_x)
+
+array = model.forward(inpt_test_x).data.numpy()
+array = squareform(pdist(array, 'euclidean'))
+array_kernel = scip.exp(-(array ** 2) / sigma ** 2)
+
+clf = svm.SVC(kernel='precomputed')
+clf.fit(array_kernel,y_test)
+
+ans = clf.predict(y_test)
+error =  y_test - ans
+print 'Deep Kernel Learning Accuracy: ' ,accuracy(error)
